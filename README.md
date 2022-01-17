@@ -1,6 +1,14 @@
 # HelloID-Conn-Prov-Target-Caci-Osiris-Update-Email
 
-> :warning: This connector has not been tested on a HelloID environment.
+| :warning: Warning |
+|:---------------------------|
+| Note that this connector is not yet implemented nor tested on a HelloID environment. Contact our support for further assistance       |
+
+| :information_source: Information |
+|:---------------------------|
+| This repository contains the connector and configuration code only. The implementer is responsible to acquire the connection details such as username, password, certificate, etc. You might even need to sign a contract or agreement with the supplier before implementing this connector. Please contact the client's application manager to coordinate the connector requirements.       |
+
+<br />
 
 <p align="center">
   <img src="https://www.caci.nl/wp-content/themes/caci-bootscore-child/img/logo/logo.svg">
