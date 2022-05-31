@@ -15,7 +15,7 @@ $auditLogs = [System.Collections.Generic.List[PSCustomObject]]::new()
 # Mapping
 $account = @{
     studentNummer = $p.ExternalId
-    e_mailadres   = $p.Contact.Business.Email
+    e_mailadres   = $p.Accounts.ActiveDirectoryStudenten.userPrincipalName;
 }
 
 #region functions
@@ -50,11 +50,10 @@ try {
     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
     $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
     $headers.Add("Api-Key", $config.ApiKey)
-    $headers.Add("OS-STUDENTNUMMER", $aRef)
 
     Write-Verbose "Verify if Caci-Osiris account for: [$($p.DisplayName)] exists"
     $splatParams = @{
-        Url     = "$($config.BaseUrl)/student/contactgegevens"
+        Uri     = "$($config.BaseUrl)/basis/student?p_studentnummer=$($aRef)"
         Method  = 'GET'
         Headers = $headers
     }
@@ -80,22 +79,29 @@ try {
             'Update' {
                 Write-Verbose "Updating Caci-Osiris eMailAddress for: [$($p.DisplayName)]"
                 $body = @{
-                    e_mailadres = $account.e_mailadres
+                    p_studentnummer = $account.studentNummer
+                    p_e_mail_adres = $account.e_mailadres
                 } | ConvertTo-Json -Depth 10
 
                 $splatParams = @{
-                    Url         = "$($config.BaseUrl)/student/contactgegevens"
+                    Uri         = "$($config.BaseUrl)/basis/student/update_account"
                     Method      = 'PUT'
                     Body        = $body
                     Headers     = $headers
                     ContentType = 'application/json'
                 }
                 $responseUpdateUser = Invoke-RestMethod @splatParams
-                if ($responseUpdateUser.statusmeldingen[0].status -eq 'bijgewerkt'){
+                if ($responseUpdateUser.statusmeldingen.Count -eq 0){
                     $accountReference = $responseGetUser.studentnummer
                     $success = $true
                     $auditLogs.Add([PSCustomObject]@{
                         Message = "Updated emailAddress for: [$($p.DisplayName)]"
+                        IsError = $false
+                    })
+                } elseif ($responseUpdateUser.statusmeldingen.Count -gt 0) {
+                    $success = $false
+                    $auditLogs.Add([PSCustomObject]@{
+                        Message = "Could not update e-mail for student with Error: $($responseUpdateUser.statusmeldingen[0].tekst)"
                         IsError = $false
                     })
                 }
@@ -115,7 +121,7 @@ try {
     $success = $false
     $ex = $PSItem
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
-    $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
+        $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
         $errorObj = Resolve-HTTPError -ErrorObject $ex
         $errorMessage = "Could not update Caci-Osiris eMail account for: [$($p.DisplayName)]. Error: $($errorObj.ErrorMessage)"
     } else {
