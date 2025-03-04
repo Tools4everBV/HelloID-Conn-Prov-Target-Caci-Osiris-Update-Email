@@ -1,43 +1,43 @@
-##########################################################
+#################################################
 # HelloID-Conn-Prov-Target-Caci-Osiris-Update-Email-Create
-#
-# Version: 1.0.0
-##########################################################
-$VerbosePreference = "Continue"
+# PowerShell V2
+#################################################
 
-# Initialize default value's
-$config = $configuration | ConvertFrom-Json
-$p = $person | ConvertFrom-Json
-$success = $false
-$auditLogs = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-# Mapping
-$account = @{
-    studentNummer = $p.ExternalId
-    e_mailadres   = $p.Accounts.ActiveDirectoryStudenten.userPrincipalName;
-}
+# Enable TLS1.2
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
 
 #region functions
-function Resolve-HTTPError {
+function Resolve-Caci-Osiris-Update-EmailError {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory,
-            ValueFromPipeline
-        )]
-        [object]$ErrorObject
+        [Parameter(Mandatory)]
+        [object]
+        $ErrorObject
     )
     process {
         $httpErrorObj = [PSCustomObject]@{
-            FullyQualifiedErrorId = $ErrorObject.FullyQualifiedErrorId
-            MyCommand             = $ErrorObject.InvocationInfo.MyCommand
-            RequestUri            = $ErrorObject.TargetObject.RequestUri
-            ScriptStackTrace      = $ErrorObject.ScriptStackTrace
-            ErrorMessage          = ''
+            ScriptLineNumber = $ErrorObject.InvocationInfo.ScriptLineNumber
+            Line             = $ErrorObject.InvocationInfo.Line
+            ErrorDetails     = $ErrorObject.Exception.Message
+            FriendlyMessage  = $ErrorObject.Exception.Message
         }
-        if ($ErrorObject.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') {
-            $httpErrorObj.ErrorMessage = $ErrorObject.ErrorDetails.Message
+        if (-not [string]::IsNullOrEmpty($ErrorObject.ErrorDetails.Message)) {
+            $httpErrorObj.ErrorDetails = $ErrorObject.ErrorDetails.Message
         } elseif ($ErrorObject.Exception.GetType().FullName -eq 'System.Net.WebException') {
-            $httpErrorObj.ErrorMessage = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+            if ($null -ne $ErrorObject.Exception.Response) {
+                $streamReaderResponse = [System.IO.StreamReader]::new($ErrorObject.Exception.Response.GetResponseStream()).ReadToEnd()
+                if (-not [string]::IsNullOrEmpty($streamReaderResponse)) {
+                    $httpErrorObj.ErrorDetails = $streamReaderResponse
+                }
+            }
+        }
+        try {
+            $errorDetailsObject = ($httpErrorObj.ErrorDetails | ConvertFrom-Json)
+            # Make sure to inspect the error result object and add only the error message as a FriendlyMessage.
+            # $httpErrorObj.FriendlyMessage = $errorDetailsObject.message
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails # Temporarily assignment
+        } catch {
+            $httpErrorObj.FriendlyMessage = $httpErrorObj.ErrorDetails
         }
         Write-Output $httpErrorObj
     }
@@ -45,109 +45,85 @@ function Resolve-HTTPError {
 #endregion
 
 try {
-    # Begin
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
-    $headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
-    $headers.Add("Api-Key", $config.ApiKey)
+    # Initial Assignments
+    $outputContext.AccountReference = 'Currently not available'
 
-    Write-Verbose "Verify if Caci-Osiris account for: [$($p.DisplayName)] exists"
-    $splatParams = @{
-        Uri     = "$($config.BaseUrl)/basis/student?p_studentnummer=$($account.studentNummer)"
-        Method  = 'GET'
-        Headers = $headers
-    }
-    $responseGetUser = Invoke-RestMethod @splatParams
+    # Validate correlation configuration
+    if ($actionContext.CorrelationConfiguration.Enabled) {
+        $correlationField = $actionContext.CorrelationConfiguration.AccountField
+        $correlationValue = $actionContext.CorrelationConfiguration.PersonFieldValue
 
-    if ($responseGetUser.studentnummer -eq $($p.ExternalId)){
-        # If the eMailAddress in HelloID matches with the eMailAddress in Caci-Osiris -> Correlate
-        Write-Verbose "Verifying if the emailAddress for: [$($p.DisplayName)] must be updated"
-        if ($responseGetUser.e_mailadres -eq $account.e_mailadres){
-            $action = 'Correlate'
-            # If the eMailAddress in HelloID differs from the eMailAddress in Caci-Osiris -> Correlate-Update
-        } elseif ($responseGetUser.e_mailadres -ne $account.e_mailadres){
-            $action = 'Correlate-Update'
+        if ([string]::IsNullOrEmpty($($correlationField))) {
+            throw 'Correlation is enabled but not configured correctly'
+        }
+        if ([string]::IsNullOrEmpty($($correlationValue))) {
+            throw 'Correlation is enabled but [accountFieldValue] is empty. Please make sure it is correctly mapped'
         }
 
-        $msg = "$action Caci-Osiris eMail account for: [$($p.DisplayName)] will be executed during enforcement"
+        # Determine if a user needs to be [created] or [correlated]
+        $headers = @{}
+        $headers.Add("Api-Key", $actionContext.configuration.ApiKey)    
+     
+        $splatParams = @{
+            Uri     = "$($actionContext.configuration.BaseUrl)/basis/student?p_studentnummer=$correlationValue)"
+            Method  = 'GET'
+            Headers = $headers
+        }
+        $correlatedAccount = Invoke-RestMethod @splatParams
+        if ($null -ne $correlatedAccount){
+             $action = 'CorrelateAccount'
+            } 
+        else {
+             $action = 'NotFound'
+        }          
     }
-
-    # Add an auditMessage showing what will happen during enforcement
-    if ($dryRun -eq $true){
-        $auditLogs.Add([PSCustomObject]@{
-            Message = $msg
-            IsError = $false
-        })
+    else 
+    {
+        throw "Error in correlation configuration. The correlation configuration is not enabled, but this connector requires the correlation configuration to be set to enabled"
     }
 
     # Process
-    if (-not($dryRun -eq $true)){
-        switch ($action){
-            'Correlate' {
-                Write-Verbose "Correlating Caci-Osiris account for: [$($p.DisplayName)]"
-                $accountReference = $responseGetUser.studentnummer
-                $success = $true
-                $auditLogs.Add([PSCustomObject]@{
-                    Message = "Correlated Caci-Osiris account for: $($p.DisplayName)"
+    switch ($action) {
+        'NotFound' {                                
+            Write-Information "Caci-Osiris-Update-Email account: student number [$correlationValue] could not be found"
+            $outputContext.Success = $false
+            $outputContext.AuditLogs.Add([PSCustomObject]@{
+                    Message = "Caci-Osiris-Update-Email account: [$correlationValue] could not be found, could not update the Email"
+                    IsError = $true
+                })
+            break
+        }
+
+        'CorrelateAccount' {
+            Write-Information 'Correlating Caci-Osiris-Update-Email account'
+
+            $outputContext.Data = $correlatedAccount
+            $outputContext.AccountReference = $correlationValue
+            $outputContext.AccountCorrelated = $true
+            $outputContext.Success = $true
+            $outputContext.AuditLogs.Add([PSCustomObject]@{
+                    Message = "Correlated account: [$($outputContext.AccountReference)] on field: [$($correlationField)] with value: [$($correlationValue)]"
                     IsError = $false
                 })
-                break
-            }
-
-            'Correlate-Update' {
-                Write-Verbose "Correlating and updating Caci-Osiris account for: [$($p.DisplayName)]"
-                $body = @{
-                    p_studentnummer = $account.studentNummer
-                    p_e_mail_adres = $account.e_mailadres
-                } | ConvertTo-Json -Depth 10
-
-                $splatParams = @{
-                    Uri         = "$($config.BaseUrl)/basis/student/update_account"
-                    Method      = 'PUT'
-                    Body        = $body
-                    Headers     = $headers
-                    ContentType = 'application/json'
-                }
-                $responseUpdateUser = Invoke-RestMethod @splatParams
-
-                if ($responseUpdateUser.statusmeldingen.Count -eq 0){
-                    $accountReference = $responseGetUser.studentnummer
-                    $success = $true
-                    $auditLogs.Add([PSCustomObject]@{
-                        Message = "Correlated Caci-Osiris eMail account and updated emailAddress for: [$($p.DisplayName)]"
-                        IsError = $false
-                    })
-                } elseif ($responseUpdateUser.statusmeldingen.Count -gt 0) {
-                    $success = $false
-                    $auditLogs.Add([PSCustomObject]@{
-                        Message = "Could not update student e-mail with error: $($responseUpdateUser.statusmeldingen[0].tekst)"
-                        IsError = $false
-                    })
-                } 
-            }
+           
+            break
         }
     }
+     
 } catch {
-    $success = $false
+    $outputContext.success = $false
     $ex = $PSItem
     if ($($ex.Exception.GetType().FullName -eq 'Microsoft.PowerShell.Commands.HttpResponseException') -or
         $($ex.Exception.GetType().FullName -eq 'System.Net.WebException')) {
-        $errorObj = Resolve-HTTPError -ErrorObject $ex
-        $errorMessage = "Could not $action Caci-Osiris eMail account for: [$($p.DisplayName)]. Error: $($errorObj.ErrorMessage)"
+        $errorObj = Resolve-Caci-Osiris-Update-EmailError -ErrorObject $ex
+        $auditMessage = "Could not create or correlate Caci-Osiris account. Error: $($errorObj.FriendlyMessage)"
+        Write-Warning "Error at Line '$($errorObj.ScriptLineNumber)': $($errorObj.Line). Error: $($errorObj.ErrorDetails)"
     } else {
-        $errorMessage = "Could not $action Caci-Osiris eMail account for: [$($p.DisplayName)]. Error: $($ex.Exception.Message)"
+        $auditMessage = "Could not create or correlate Caci-Osiris account. Error: $($ex.Exception.Message)"
+        Write-Warning "Error at Line '$($ex.InvocationInfo.ScriptLineNumber)': $($ex.InvocationInfo.Line). Error: $($ex.Exception.Message)"
     }
-    Write-Verbose $errorMessage
-    $auditLogs.Add([PSCustomObject]@{
-        Message = $errorMessage
-        IsError = $true
-    })
-# End
-} finally {
-   $result = [PSCustomObject]@{
-        Success          = $success
-        AccountReference = $accountReference
-        Auditlogs        = $auditLogs
-        Account          = $account
-    }
-    Write-Output $result | ConvertTo-Json -Depth 10
+    $outputContext.AuditLogs.Add([PSCustomObject]@{
+            Message = $auditMessage
+            IsError = $true
+        })
 }
