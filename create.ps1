@@ -65,7 +65,7 @@ try {
         $headers.Add("Api-Key", $actionContext.configuration.ApiKey)    
      
         $splatParams = @{
-            Uri     = "$($actionContext.configuration.BaseUrl)/basis/student?p_studentnummer=$correlationValue)"
+            Uri     = "$($actionContext.configuration.BaseUrl)/basis/student?p_studentnummer=$($correlationValue)"
             Method  = 'GET'
             Headers = $headers
         }
