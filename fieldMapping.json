@@ -32,6 +32,15 @@
           "Value": "\"function getValue() {\\r\\n    return Person.Accounts.MicrosoftActiveDirectory.userPrincipalName\\r\\n}\\r\\ngetValue();\"",
           "UsedInNotifications": false,
           "StoreInAccountData": false
+        },
+        {
+          "MapForActions": [
+            "Delete"
+          ],
+          "MappingMode": "Fixed",
+          "Value": "\"\"",
+          "UsedInNotifications": false,
+          "StoreInAccountData": false
         }
       ]
     }
