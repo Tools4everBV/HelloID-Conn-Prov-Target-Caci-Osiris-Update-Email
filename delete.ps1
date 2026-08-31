@@ -74,7 +74,7 @@ try {
             Write-Information "Deleting Caci-Osiris Email address of accountReference: [$($actionContext.References.Account)]"
             $body = @{
                 p_studentnummer = $actionContext.References.Account
-                p_e_mail_adres = $null
+                p_e_mail_adres = $actionContext.Data.p_e_mail_adres
             } | ConvertTo-Json -Depth 10
 
             if (-not($actionContext.DryRun -eq $true)) {
